@@ -41,8 +41,55 @@ model_list:
       api_base: http://localhost:8788/v1
       api_key: grok-via-web-dummy
 
-  # ---- OpenRouter (umbrella for everything else) ----
-  # Common ids — add more in your local copy of this file.
+  # ---- QClaw local M2 router (free MiniMax M2) ----
+  # If you have QClaw / openclaw running locally with the AuthGateway exposing
+  # a `modelroute` upstream, point at it here. No API key needed locally.
+  # Falls through gracefully if QClaw isn't running (LiteLLM just won't route).
+  - model_name: m2
+    litellm_params:
+      model: openai/modelroute
+      api_base: http://127.0.0.1:19100/proxy/llm
+      api_key: qclaw-local
+      timeout: 120
+
+  # ---- OpenRouter FREE models (no per-token cost, has its own quota) ----
+  # All `:free` models. Confirmed via OpenRouter `/api/v1/models` 2026-05-14.
+  - model_name: glm-4.5-air-free
+    litellm_params:
+      model: openrouter/z-ai/glm-4.5-air:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: minimax-m2-free
+    litellm_params:
+      model: openrouter/minimax/minimax-m2.5:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: deepseek-v4-free
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: qwen3-coder-free
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gpt-oss-120b-free
+    litellm_params:
+      model: openrouter/openai/gpt-oss-120b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gemma-4-31b-free
+    litellm_params:
+      model: openrouter/google/gemma-4-31b-it:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: nemotron-super-free
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-super-120b-a12b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ---- OpenRouter PAID — top models ----
   - model_name: claude-sonnet-4.5
     litellm_params:
       model: openrouter/anthropic/claude-sonnet-4.5

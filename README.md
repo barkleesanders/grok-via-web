@@ -19,9 +19,25 @@ the CLI talks to transparently.
 - ✅ No reverse-engineered crypto, no Statsig bypass, no Cloudflare tricks
 - ✅ All requests go through the genuine grok.com SPA — same auth your browser uses
 - ✅ Works with `grok` interactive TUI and `grok -p "one-shot"` headless mode
+- ✅ Companion `grok-litellm` adds OpenRouter (incl. **free** models), OpenAI, Anthropic, and local QClaw `m2` to the same CLI
 - ⚠️  ~7-14s per turn (slower than a direct API)
 - ⚠️  Each turn creates a chat entry in your grok.com sidebar history
 - ⚠️  Stripped of CLI's system prompt — grok.com supplies its own and chokes on huge prepended instructions
+
+## grok.com Free Tier Limits (verified 2026-05-14)
+
+| What | Limit |
+|---|---|
+| Queries per 2-hour rolling window | **25** (across `auto`/`fast`/`expert` combined) |
+| `heavy` mode (multi-expert) | Requires SuperGrok Heavy ($300/mo) — not routable from this proxy |
+| Per-turn timeout | grok.com is patient (no hard wall observed); proxy gives up at 90s |
+| Sidebar history | Every turn = one chat entry. Periodic cleanup recommended. |
+| File / image attachments | Not implemented — proxy forwards text only |
+| Tool use (model calling functions back) | NOT supported. The Grok CLI's tool-call XML gets stripped before forwarding because grok.com routes it to its sitemap-extractor persona. |
+
+**Check your remaining quota:** open `https://grok.com/rest/rate-limits` in the same Chrome tab (POST `{"modelName":"auto"}`) — returns `{remainingQueries, waitTimeSeconds}`. When you hit 0, the proxy now returns a clear `429` instead of silently empty.
+
+**Workaround when rate-limited:** use `grok-litellm` with a free OpenRouter model or your local QClaw `m2`. The TUI keeps working; only the upstream model changes.
 
 ---
 
@@ -48,18 +64,20 @@ git clone https://github.com/barkleesanders/grok-via-web ~/.grok-proxy
 ~/.grok-proxy/install.sh
 ```
 
-### Add OpenRouter / OpenAI / Anthropic (optional)
+### Add OpenRouter / OpenAI / Anthropic / Local QClaw (optional)
 
-To use `claude-sonnet-4.5`, `gpt-4o`, `gemini-2.5-pro`, etc through the same CLI:
+To use `claude-sonnet-4.5`, `gpt-4o`, free models, or your local QClaw `m2` through the same Grok CLI:
 
 ```bash
-# Pick one or more — only providers with keys will be routable
+# Pick one or more — only providers with valid keys will be routable
 export OPENROUTER_API_KEY=sk-or-v1-...           # https://openrouter.ai/keys
 export OPENAI_API_KEY=sk-...                     # https://platform.openai.com/api-keys
 export ANTHROPIC_API_KEY=sk-ant-...              # https://console.anthropic.com
 
-grok-litellm --grok -m claude-sonnet-4.5         # via OpenRouter
-grok-litellm --grok -m grok-3                    # via your grok.com session
+grok-litellm --grok -m grok-3                    # your grok.com session
+grok-litellm --grok -m glm-4.5-air-free          # free via OpenRouter
+grok-litellm --grok -m claude-sonnet-4.5         # paid via OpenRouter
+grok-litellm --grok -m m2                        # local QClaw (if running)
 ```
 
 `grok-litellm` will:
@@ -67,6 +85,31 @@ grok-litellm --grok -m grok-3                    # via your grok.com session
 - Install LiteLLM into a managed venv at `~/.grok-proxy/venv` (one-time, ~30s)
 - Start the LiteLLM router on `:4099`
 - Optionally exec the Grok CLI pointed at the router
+
+#### Built-in model menu
+
+| Model id | Provider | Cost | Notes |
+|---|---|---|---|
+| `grok-3`, `grok-3-fast`, `grok-3-mini-fast` | grok.com / Fast mode | included in subscription | rate-limited 25/2h on free tier |
+| `grok-4`, `grok-4-latest`, `grok-expert` | grok.com / Expert mode | included | same rate limit |
+| `grok-auto`, `grok-4-auto` | grok.com / Auto mode | included | grok.com picks Fast/Expert |
+| `grok-code-fast-1` | grok.com / Fast mode | included | mapped to Fast |
+| `m2` | local QClaw @ `:19100` | $0 | needs QClaw running |
+| `glm-4.5-air-free` | OpenRouter free | $0 | needs `OPENROUTER_API_KEY` |
+| `minimax-m2-free` | OpenRouter free | $0 | MiniMax M2.5 free tier |
+| `deepseek-v4-free` | OpenRouter free | $0 | DeepSeek V4 Flash |
+| `qwen3-coder-free` | OpenRouter free | $0 | strong code model |
+| `gpt-oss-120b-free` | OpenRouter free | $0 | OpenAI GPT-OSS 120B |
+| `gemma-4-31b-free` | OpenRouter free | $0 | Google Gemma 4 31B |
+| `nemotron-super-free` | OpenRouter free | $0 | NVIDIA Nemotron 3 Super 120B |
+| `claude-sonnet-4.5`, `claude-opus-4` | OpenRouter paid | per-token | |
+| `gpt-4o`, `gpt-5` | OpenRouter paid | per-token | |
+| `gemini-2.5-pro` | OpenRouter paid | per-token | |
+| `openrouter/<vendor>/<model>` | OpenRouter passthrough | varies | any OpenRouter model id |
+| `openai/<model>` | OpenAI direct | per-token | needs `OPENAI_API_KEY` |
+| `anthropic/<model>` | Anthropic direct | per-token | needs `ANTHROPIC_API_KEY` |
+
+> The free OpenRouter models have their own daily quotas (typically ~20-50 requests/day per IP). Once exhausted you'll get a 429 — switch to another free model or pay.
 
 ---
 
@@ -163,6 +206,28 @@ These mirror what grok.com exposes for your account:
 
 ---
 
+## What actually happens when you run it
+
+End-to-end paths confirmed working on 2026-05-14:
+
+```
+direct mode (grok-via-web)
+┌──────────┐   :8788 OpenAI    ┌─────────────┐   :9222 CDP   ┌──────────┐
+│ grok TUI │ ────────────────► │ proxy_chrome│ ─────────────►│ Chrome   │── grok.com
+└──────────┘ ◄──── tokens ──── │             │ ◄─ NDJSON ─── │  tab     │
+                                └─────────────┘               └──────────┘
+
+router mode (grok-litellm)
+┌──────────┐   :4099 OpenAI    ┌──────────┐   :8788 OpenAI   ┌──────────────┐
+│ grok TUI │ ─────────────────►│ LiteLLM  │ ────────────────►│ proxy_chrome │ ──► grok.com
+│          │                   │ router   │                  └──────────────┘
+│          │                   │          │ ──► openrouter.ai (free/paid)
+│          │                   │          │ ──► api.openai.com (if key)
+│          │                   │          │ ──► api.anthropic.com (if key)
+│          │                   │          │ ──► localhost:19100 (QClaw m2)
+└──────────┘                   └──────────┘
+```
+
 ## How it works
 
 For each `POST /v1/chat/completions` the CLI sends:
@@ -210,12 +275,15 @@ These get overridden by the launcher and exposed to the `grok` binary:
 
 | Symptom | Fix |
 |---|---|
+| TUI says "Turn completed in 4s" with no answer | grok.com hit the **25 queries / 2h** free-tier cap. Visit `https://grok.com/rest/rate-limits` to see `waitTimeSeconds`. Switch to `grok-litellm --grok -m glm-4.5-air-free` (or any free model) to keep working. The latest proxy surfaces this as a clean `429` instead of silent empty. |
+| Sitemap-flavored nonsense in reply | Pre-2026-05-14 flatten bug. Update — latest extracts only `<user_query>` content from the CLI's 100KB prompt. |
 | `❌ Chrome not reachable at :9222` | Restart Chrome with `--remote-debugging-port=9222` (see Prerequisites step 2) |
-| `🚀 Starting grok-proxy` but `❌ Proxy didn't come up` | Check `/tmp/grok-proxy-chrome.log` for stack traces (often missing `aiohttp` → `pip install --user aiohttp`) |
-| Proxy returns the wrong text (echoing CLI's system prompt) | Update — the latest version drops `role: system` messages before forwarding |
-| Response comes back blank | grok.com may be rate-limiting your account. Check `https://grok.com/rest/rate-limits` in the browser. |
-| Sidebar fills up with junk | Run `grok-via-web --restart` periodically; or open grok.com → History → bulk delete |
-| `unbound variable: GROK_ARGS[@]` | Pre-2026-05-14 launcher bug. Update to latest: `curl -fsSL .../install.sh \| bash`. |
+| `🚀 Starting grok-proxy` but `❌ Proxy didn't come up` | Check `/tmp/grok-proxy-chrome.log` (often missing `aiohttp` → `pip install --user aiohttp`) |
+| `❌ Proxy didn't come up` for `grok-litellm` | LiteLLM venv build failed. Check `/tmp/grok-litellm.log`. Common: Python 3.14 → `orjson` build fails. Re-run on Python 3.13 with `rm -rf ~/.grok-proxy/venv && grok-litellm`. |
+| LiteLLM 401 "User not found" on a free OpenRouter model | Your `OPENROUTER_API_KEY` is invalid/revoked. Mint a fresh one at https://openrouter.ai/keys and `export OPENROUTER_API_KEY=sk-or-v1-...`. |
+| LiteLLM 429 "Too many requests" on `grok-3` | grok.com rate limit upstream — switch to a free or paid OpenRouter model in the same call. |
+| Sidebar fills up with junk | Open grok.com → History → bulk delete |
+| `unbound variable: GROK_ARGS[@]` | Pre-2026-05-14 launcher bug. Re-run `curl -fsSL .../install.sh \| bash`. |
 
 Verbose proxy logs:
 ```bash

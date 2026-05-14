@@ -299,10 +299,31 @@ async def capture_chat_response(cdp: CDPSession) -> str:
 # NDJSON parsing (same shape as cookie-replay proxy)
 # ============================================================================
 
+class GrokError(Exception):
+    """Surfaces grok.com server errors (rate limits, auth, etc) to the caller."""
+
+
 def parse_chat_body(body: str) -> str:
-    """Extract the final assembled assistant message text from NDJSON."""
+    """Extract the final assembled assistant message text from grok.com's
+    NDJSON stream.
+
+    Raises GrokError if the body looks like an error JSON (single non-NDJSON
+    object with `error` key, or contains a rate-limit indicator). This is the
+    most common failure mode — quota exhausted at 25 queries/2h on free tier.
+    """
     tokens = []
     final_msg = None
+    error_msg = None
+
+    # Common single-line error JSON: {"error":{"code":N,"message":"...","details":[]}}
+    try:
+        single = json.loads(body)
+        if isinstance(single, dict) and "error" in single:
+            err = single["error"]
+            error_msg = err.get("message") or str(err)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
     for line in body.splitlines():
         line = line.strip()
         if not line:
@@ -310,6 +331,11 @@ def parse_chat_body(body: str) -> str:
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        # NDJSON-formatted error frames
+        if isinstance(ev, dict) and "error" in ev and "result" not in ev:
+            err = ev["error"]
+            error_msg = err.get("message") if isinstance(err, dict) else str(err)
             continue
         resp = ev.get("result", {}).get("response", {})
         if not resp:
@@ -324,9 +350,24 @@ def parse_chat_body(body: str) -> str:
             msg = mr.get("message", "")
             if msg:
                 final_msg = msg
+
     if final_msg:
         return final_msg
-    return "".join(tokens)
+    text = "".join(tokens)
+    if text:
+        return text
+    # Nothing extracted — surface error if we saw one, else a clear "empty"
+    # marker so the caller doesn't silently send "" back to the CLI.
+    if error_msg:
+        raise GrokError(error_msg)
+    # Detect implicit rate-limit shape: empty body or near-empty NDJSON
+    if len(body.strip()) < 50:
+        raise GrokError(
+            "grok.com returned an empty response. This usually means you've "
+            "hit the free-tier rate limit (25 queries / 2h). Check "
+            "https://grok.com/rest/rate-limits in your browser to see when it "
+            "resets, or switch to a non-grok model via grok-litellm.")
+    raise GrokError(f"grok.com response yielded no tokens (body len={len(body)})")
 
 
 # ============================================================================
@@ -435,6 +476,12 @@ class Proxy:
                     log.info("submitted via %s", submit_info)
                     body = await capture_chat_response(cdp)
                     text = parse_chat_body(body)
+            except GrokError as e:
+                log.warning("grok.com error: %s", e)
+                return web.json_response(
+                    {"error": {"message": str(e),
+                               "type": "grok_com_error",
+                               "code": "upstream_error"}}, status=429)
             except Exception as e:
                 log.exception("turn failed")
                 return web.json_response(
