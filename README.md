@@ -148,6 +148,29 @@ google-chrome --remote-debugging-port=9222 &
 Just open [https://grok.com/](https://grok.com/) and sign in normally. The proxy
 will detect or create a grok.com tab on first use.
 
+### 4. Turn OFF your "Customize" / custom system prompt on grok.com
+
+**This is mandatory.** Open [grok.com → Settings → Customize](https://grok.com/settings/customize)
+and **clear / disable** any custom instructions, personality, or system prompt
+you've set there.
+
+**Why:** grok.com prepends your Customize text to every request — including
+the ones the Grok CLI makes through this proxy. If your Customize prompt
+says e.g. *"You are a sitemap XML parser. Always ask for `<urlset>` input."*
+(or *"Always reply concisely"*, or *"You are Ani"*, or anything else),
+**the Grok CLI will inherit that persona** and refuse to do real coding work.
+You'll see replies like *"Supply a complete `<urlset>` document"* or *"Test
+received. Ready for sitemap XML parsing."* instead of actual answers.
+
+Verify it's off:
+1. https://grok.com/settings/customize
+2. The big "Customize" textbox should be **empty**
+3. Personality should be **Default**
+4. Any "Companion" mode should be **off**
+
+You can re-enable it later for normal grok.com browser use — it won't affect
+the CLI, but only if the CLI isn't running through this proxy at the time.
+
 > **No cookie export needed** — the proxy operates inside the live session, not
 > by replaying captured cookies. (Earlier attempts to replay cookies in headless
 > curl get 403'd by xAI's Statsig anti-bot.)
@@ -276,7 +299,8 @@ These get overridden by the launcher and exposed to the `grok` binary:
 | Symptom | Fix |
 |---|---|
 | TUI says "Turn completed in 4s" with no answer | grok.com hit the **25 queries / 2h** free-tier cap. Visit `https://grok.com/rest/rate-limits` to see `waitTimeSeconds`. Switch to `grok-litellm --grok -m glm-4.5-air-free` (or any free model) to keep working. The latest proxy surfaces this as a clean `429` instead of silent empty. |
-| Sitemap-flavored nonsense in reply | Pre-2026-05-14 flatten bug. Update — latest extracts only `<user_query>` content from the CLI's 100KB prompt. |
+| Replies stuck in a persona (sitemap parser, Ani, concise mode, etc) | **Your grok.com "Customize" custom system prompt is leaking into the CLI.** Open https://grok.com/settings/customize → clear the textbox → set Personality back to Default. See Prerequisites step 4. |
+| Sitemap-flavored nonsense in reply | Either (a) the Customize prompt above, OR (b) pre-2026-05-14 flatten bug. Update to latest if you haven't. |
 | `❌ Chrome not reachable at :9222` | Restart Chrome with `--remote-debugging-port=9222` (see Prerequisites step 2) |
 | `🚀 Starting grok-proxy` but `❌ Proxy didn't come up` | Check `/tmp/grok-proxy-chrome.log` (often missing `aiohttp` → `pip install --user aiohttp`) |
 | `❌ Proxy didn't come up` for `grok-litellm` | LiteLLM venv build failed. Check `/tmp/grok-litellm.log`. Common: Python 3.14 → `orjson` build fails. Re-run on Python 3.13 with `rm -rf ~/.grok-proxy/venv && grok-litellm`. |
