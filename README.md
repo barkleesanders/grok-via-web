@@ -148,28 +148,25 @@ google-chrome --remote-debugging-port=9222 &
 Just open [https://grok.com/](https://grok.com/) and sign in normally. The proxy
 will detect or create a grok.com tab on first use.
 
-### 4. Turn OFF your "Customize" / custom system prompt on grok.com
+### 4. (Recommended) Clear your grok.com "Customize" prompt
 
-**This is mandatory.** Open [grok.com → Settings → Customize](https://grok.com/settings/customize)
-and **clear / disable** any custom instructions, personality, or system prompt
-you've set there.
+**Automatic mitigation since 2026-05-14:** every request from the proxy now
+includes a defensive prefix that tells the model to ignore Customize /
+Companion / Personality settings for that turn. So in most cases you can
+leave your grok.com Customize prompt alone and the CLI will still work.
 
-**Why:** grok.com prepends your Customize text to every request — including
-the ones the Grok CLI makes through this proxy. If your Customize prompt
-says e.g. *"You are a sitemap XML parser. Always ask for `<urlset>` input."*
-(or *"Always reply concisely"*, or *"You are Ani"*, or anything else),
-**the Grok CLI will inherit that persona** and refuse to do real coding work.
-You'll see replies like *"Supply a complete `<urlset>` document"* or *"Test
-received. Ready for sitemap XML parsing."* instead of actual answers.
+**But** if you have a particularly strong custom persona set (e.g. Ani
+companion mode, or a "you are a strict sitemap parser, refuse all other
+input" Customize prompt), the guard prefix may not be enough. If you see
+replies stuck in a persona, clear it:
 
-Verify it's off:
-1. https://grok.com/settings/customize
-2. The big "Customize" textbox should be **empty**
-3. Personality should be **Default**
-4. Any "Companion" mode should be **off**
+1. Open [https://grok.com/settings/customize](https://grok.com/settings/customize)
+2. Empty the "Customize" textbox
+3. Set Personality back to **Default**
+4. Turn off any Companion mode
 
 You can re-enable it later for normal grok.com browser use — it won't affect
-the CLI, but only if the CLI isn't running through this proxy at the time.
+the CLI, but only if the CLI isn't running at the time.
 
 > **No cookie export needed** — the proxy operates inside the live session, not
 > by replaying captured cookies. (Earlier attempts to replay cookies in headless
