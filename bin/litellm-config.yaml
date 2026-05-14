@@ -1,0 +1,108 @@
+# grok-via-web LiteLLM router config
+#
+# Exposes a unified /v1/chat/completions on port 4000 that routes:
+#   - grok-3, grok-4, grok-auto  →  grok-via-web proxy (your grok.com session)
+#   - openrouter/*               →  OpenRouter (if OPENROUTER_API_KEY is set)
+#   - openai/*                   →  OpenAI direct (if OPENAI_API_KEY is set)
+#   - anthropic/*                →  Anthropic direct (if ANTHROPIC_API_KEY is set)
+#
+# Models with missing API keys are quietly skipped at startup — LiteLLM
+# just won't route to them.
+
+model_list:
+  # ---- grok.com (via local proxy_chrome) ----
+  - model_name: grok-3
+    litellm_params:
+      model: openai/grok-3
+      api_base: http://localhost:8788/v1
+      api_key: grok-via-web-dummy
+
+  - model_name: grok-3-fast
+    litellm_params:
+      model: openai/grok-3-fast
+      api_base: http://localhost:8788/v1
+      api_key: grok-via-web-dummy
+
+  - model_name: grok-4
+    litellm_params:
+      model: openai/grok-4
+      api_base: http://localhost:8788/v1
+      api_key: grok-via-web-dummy
+
+  - model_name: grok-auto
+    litellm_params:
+      model: openai/grok-auto
+      api_base: http://localhost:8788/v1
+      api_key: grok-via-web-dummy
+
+  - model_name: grok-code-fast-1
+    litellm_params:
+      model: openai/grok-code-fast-1
+      api_base: http://localhost:8788/v1
+      api_key: grok-via-web-dummy
+
+  # ---- OpenRouter (umbrella for everything else) ----
+  # Common ids — add more in your local copy of this file.
+  - model_name: claude-sonnet-4.5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4.5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: claude-opus-4
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-4
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gpt-5
+    litellm_params:
+      model: openrouter/openai/gpt-5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: deepseek-v3.1
+    litellm_params:
+      model: openrouter/deepseek/deepseek-chat
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: llama-3.3-70b
+    litellm_params:
+      model: openrouter/meta-llama/llama-3.3-70b-instruct
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: openrouter/google/gemini-2.5-pro
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ---- Catch-all: pass any "openrouter/<vendor>/<model>" through ----
+  - model_name: openrouter/*
+    litellm_params:
+      model: openrouter/*
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # ---- Native providers (if you have direct keys) ----
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  drop_params: true       # silently drop unsupported params per backend
+  set_verbose: false
+  num_retries: 1
+  request_timeout: 120
+
+general_settings:
+  # No master_key — proxy listens on localhost only, so anyone with local
+  # access already has full power. Adding a key here just creates noise.
+  master_key: null
+  database_url: null

@@ -47,15 +47,19 @@ mkdir -p "$INSTALL_DIR" "$BIN_LINK_DIR"
 # If we're running from inside a clone of the repo, copy local files.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/bin/proxy_chrome.py" ]; then
-  cp "$SCRIPT_DIR/bin/proxy_chrome.py" "$INSTALL_DIR/proxy_chrome.py"
-  cp "$SCRIPT_DIR/bin/grok-via-web.sh" "$INSTALL_DIR/grok-via-web.sh"
+  cp "$SCRIPT_DIR/bin/proxy_chrome.py"     "$INSTALL_DIR/proxy_chrome.py"
+  cp "$SCRIPT_DIR/bin/grok-via-web.sh"     "$INSTALL_DIR/grok-via-web.sh"
+  cp "$SCRIPT_DIR/bin/grok-litellm.sh"     "$INSTALL_DIR/grok-litellm.sh"
+  cp "$SCRIPT_DIR/bin/litellm-config.yaml" "$INSTALL_DIR/litellm-config.yaml"
   ok "Copied from local checkout: $SCRIPT_DIR"
 else
-  curl -fsSL "$REPO_RAW/bin/proxy_chrome.py" -o "$INSTALL_DIR/proxy_chrome.py"
-  curl -fsSL "$REPO_RAW/bin/grok-via-web.sh" -o "$INSTALL_DIR/grok-via-web.sh"
+  curl -fsSL "$REPO_RAW/bin/proxy_chrome.py"     -o "$INSTALL_DIR/proxy_chrome.py"
+  curl -fsSL "$REPO_RAW/bin/grok-via-web.sh"     -o "$INSTALL_DIR/grok-via-web.sh"
+  curl -fsSL "$REPO_RAW/bin/grok-litellm.sh"     -o "$INSTALL_DIR/grok-litellm.sh"
+  curl -fsSL "$REPO_RAW/bin/litellm-config.yaml" -o "$INSTALL_DIR/litellm-config.yaml"
   ok "Downloaded from $REPO_RAW"
 fi
-chmod +x "$INSTALL_DIR/grok-via-web.sh"
+chmod +x "$INSTALL_DIR/grok-via-web.sh" "$INSTALL_DIR/grok-litellm.sh"
 
 # ---- 3. Python deps --------------------------------------------------------
 
@@ -77,9 +81,10 @@ fi
 
 # ---- 4. Symlink ------------------------------------------------------------
 
-step "Linking to $BIN_LINK_DIR/grok-via-web"
+step "Linking commands to $BIN_LINK_DIR"
 ln -sf "$INSTALL_DIR/grok-via-web.sh" "$BIN_LINK_DIR/grok-via-web"
-ok "Symlinked"
+ln -sf "$INSTALL_DIR/grok-litellm.sh" "$BIN_LINK_DIR/grok-litellm"
+ok "Symlinked grok-via-web + grok-litellm"
 
 case ":$PATH:" in
   *":$BIN_LINK_DIR:"*) ok "$BIN_LINK_DIR is on PATH" ;;
@@ -131,18 +136,29 @@ $(c_green '═══════════════════════
 $(c_green '  grok-via-web installed')
 $(c_green '════════════════════════════════════════════════')
 
-Run:
+Two ways to run:
+
+$(c_cyan '1) Direct (grok.com only — no extra setup):')
   $(c_cyan 'grok-via-web')                              # interactive TUI
   $(c_cyan 'grok-via-web -p "hello"')                   # one-shot
   $(c_cyan 'grok-via-web --model grok-4-auto')          # pick a model
 
-If 'grok-via-web' isn't found, restart your shell or run:
+$(c_cyan '2) Via LiteLLM router (grok.com + OpenRouter/OpenAI/Anthropic):')
+  $(c_cyan 'export OPENROUTER_API_KEY=sk-or-v1-...')    # optional
+  $(c_cyan 'grok-litellm --grok')                        # router + TUI
+  $(c_cyan 'grok-litellm --grok -m claude-sonnet-4.5')   # use Claude via OpenRouter
+  $(c_cyan 'grok-litellm')                               # just start router on :4000
+
+If commands aren't found, restart your shell or run:
   $(c_cyan "export PATH=\"$BIN_LINK_DIR:\$PATH\"")
 
 Files installed:
   $INSTALL_DIR/proxy_chrome.py
   $INSTALL_DIR/grok-via-web.sh
-  $BIN_LINK_DIR/grok-via-web → $INSTALL_DIR/grok-via-web.sh
+  $INSTALL_DIR/grok-litellm.sh
+  $INSTALL_DIR/litellm-config.yaml
+  $BIN_LINK_DIR/grok-via-web  → $INSTALL_DIR/grok-via-web.sh
+  $BIN_LINK_DIR/grok-litellm  → $INSTALL_DIR/grok-litellm.sh
 
 Repo: https://github.com/barkleesanders/grok-via-web
 

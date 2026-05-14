@@ -31,19 +31,42 @@ the CLI talks to transparently.
 curl -fsSL https://raw.githubusercontent.com/barkleesanders/grok-via-web/main/install.sh | bash
 ```
 
-This will:
-1. Verify Python 3.9+, `curl`, `gh`/`git` are present
-2. Download `proxy_chrome.py` + `grok-via-web` launcher to `~/.grok-proxy/`
+This installs both modes:
+1. **`grok-via-web`** — direct grok.com proxy
+2. **`grok-litellm`** — LiteLLM router that adds OpenRouter / OpenAI / Anthropic on top
+
+What runs:
+1. Verifies Python 3.9+, `curl`
+2. Downloads `proxy_chrome.py`, `grok-via-web.sh`, `grok-litellm.sh`, `litellm-config.yaml` to `~/.grok-proxy/`
 3. `pip install aiohttp` (with `--user --break-system-packages` if needed)
-4. Symlink `~/.local/bin/grok-via-web`
-5. Print PATH instructions if `~/.local/bin` isn't already on it
-6. Run a self-test (if Chrome is reachable)
+4. Symlinks `~/.local/bin/grok-via-web` and `~/.local/bin/grok-litellm`
+5. Runs a self-test if Chrome is reachable
 
 Manual install:
 ```bash
 git clone https://github.com/barkleesanders/grok-via-web ~/.grok-proxy
 ~/.grok-proxy/install.sh
 ```
+
+### Add OpenRouter / OpenAI / Anthropic (optional)
+
+To use `claude-sonnet-4.5`, `gpt-4o`, `gemini-2.5-pro`, etc through the same CLI:
+
+```bash
+# Pick one or more — only providers with keys will be routable
+export OPENROUTER_API_KEY=sk-or-v1-...           # https://openrouter.ai/keys
+export OPENAI_API_KEY=sk-...                     # https://platform.openai.com/api-keys
+export ANTHROPIC_API_KEY=sk-ant-...              # https://console.anthropic.com
+
+grok-litellm --grok -m claude-sonnet-4.5         # via OpenRouter
+grok-litellm --grok -m grok-3                    # via your grok.com session
+```
+
+`grok-litellm` will:
+- Boot the grok-via-web Chrome proxy on `:8788`
+- Install LiteLLM into a managed venv at `~/.grok-proxy/venv` (one-time, ~30s)
+- Start the LiteLLM router on `:4099`
+- Optionally exec the Grok CLI pointed at the router
 
 ---
 
