@@ -339,42 +339,54 @@ def _text(c):
     return c or ""
 
 
+import re
+
+# Grok CLI wraps the human-typed query inside <user_query>...</user_query>
+USER_QUERY_RE = re.compile(
+    r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL | re.IGNORECASE)
+
+
 def flatten(messages: list[dict]) -> str:
     """OpenAI messages → single grok.com prompt.
 
-    grok.com is a chat product, not a raw model API — it appends its own
-    system prompt and won't accept ours cleanly. So we strip the CLI's
-    system prompt entirely and send conversation history + the last user
-    message as the prompt.
+    The Grok CLI sends ~100KB of XML-tagged metadata per request:
+        - 12KB system prompt
+        - <user_info> shell/cwd context
+        - <system-reminder> blocks listing available skills + MCP servers
+        - The repo's AGENTS.md / Claude.md verbatim
+        - And finally <user_query>...</user_query> with what the human typed
 
-    For coding-agent CLIs that pass thousands of tokens of system prompt
-    every turn, this is a hard ceiling: the model sees only the
-    user-visible exchange, not the agent's internal instructions.
+    If we forward all of that to grok.com, the web UI thinks the XML is a
+    request to run its sitemap/XML-extraction tool and returns nonsense.
+
+    Strategy:
+      1. Search every message for <user_query> tags. Use the LAST match
+         (that's the actual human turn).
+      2. Fallback: drop system+tool roles, return last user message verbatim.
     """
-    msgs = [(m.get("role", "user"), _text(m.get("content", "")).strip())
-            for m in messages if _text(m.get("content", "")).strip()]
-    # Drop system messages — grok.com has its own, ours just confuses it.
-    msgs = [(r, c) for r, c in msgs if r != "system"]
-    if not msgs:
+    if not messages:
         return ""
-    if len(msgs) == 1:
-        return msgs[1 if msgs[0][0] != "user" else 0][1] if msgs else ""
-    # Multi-turn: prior turns as labeled history, then the LAST user message
-    # standalone so the model focuses on it.
-    history = msgs[:-1]
-    last_role, last_content = msgs[-1]
-    if last_role != "user":
-        # Edge case: last message isn't user. Just send everything labeled.
-        label = {"user": "User", "assistant": "Assistant",
-                 "tool": "Tool result"}
-        return "\n\n".join(f"{label.get(r, r.title())}: {c}"
-                            for r, c in msgs)
-    if not history:
-        return last_content
-    label = {"user": "User", "assistant": "Assistant", "tool": "Tool result"}
-    hist = "\n\n".join(f"{label.get(r, r.title())}: {c}"
-                        for r, c in history)
-    return f"Previous conversation:\n\n{hist}\n\nCurrent question:\n\n{last_content}"
+
+    # 1. Look for <user_query> in any message (last wins).
+    last_query = None
+    for m in messages:
+        content = _text(m.get("content", ""))
+        if not content:
+            continue
+        matches = USER_QUERY_RE.findall(content)
+        if matches:
+            last_query = matches[-1].strip()
+    if last_query:
+        return last_query
+
+    # 2. No <user_query> tag — drop system/tool, use last user content.
+    user_msgs = [_text(m.get("content", "")).strip()
+                 for m in messages if m.get("role") == "user"
+                 and _text(m.get("content", "")).strip()]
+    if user_msgs:
+        return user_msgs[-1]
+
+    return ""
 
 
 # ============================================================================
