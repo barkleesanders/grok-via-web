@@ -19,15 +19,32 @@ a local model via LiteLLM, from the same CLI.
 The proxy talks to grok.com by driving your already-signed-in Chrome via the
 DevTools Protocol — your real browser session does all the auth.
 
-- ✅ Works with your existing grok.com plan (Free, Premium, SuperGrok)
-- ✅ No reverse-engineered crypto, no Statsig bypass, no Cloudflare tricks
-- ✅ All requests go through the genuine grok.com SPA — same auth your browser uses
-- ✅ Interactive TUI and headless `-p "one-shot"` mode both work
-- ✅ Multi-provider routing via LiteLLM with **free** OpenRouter models as fallback
-- ✅ Defensive prompt-prefix neutralizes account-level Customize / Companion personas
-- ⚠️  ~7-14s per turn (slower than a direct API)
-- ⚠️  Each grok.com turn creates one chat entry in your grok.com sidebar
-- ⚠️  Tool-calling (model invokes `read_file` etc) NOT supported — only text in / text out
+### ✅ What works (measured this build, 2026-05-14)
+
+- **Grok 3 (Fast) replies** — single-turn coding Q&A, ~6–10s per turn, verified with `find` command explanation, Python fibonacci one-liner, GitHub repo lookup, "say hi" smoke tests
+- **Grok 4 / grok-auto (Expert)** — same path, ~10–25s per turn (model spends longer "thinking")
+- **Interactive TUI** (`grok-litellm --grok`) and headless mode (`grok-litellm --grok -p "..."`) — both confirmed
+- **`grok login` not required** — the proxy injects a dummy API key; your Chrome session does the auth
+- **Browser-session auth** — no cookies are read/copied/stored; no Statsig bypass; no Cloudflare CAPTCHA tricks
+- **Multi-provider routing** via LiteLLM at `:4099` — grok.com + OpenRouter (free + paid) + OpenAI + Anthropic + local QClaw, single CLI
+- **Customize/Companion immunity** — defensive prompt prefix neutralizes account-level personas in the common case (verified against the exact "sitemap parser" / "send me `<urlset>`" persona this session)
+- **Error transparency** — rate-limit and grok.com errors now surface as `429` with a clear message (was silent empty before)
+- **Tab management** — proxy claims a marked grok.com tab and reuses it; sidebar stays manageable
+- **Multi-provider routing graceful** — providers without keys are simply unroutable; everything else keeps working
+
+### ⚠️ Limitations (real, measured)
+
+- **Latency per turn**: ~6s (Fast) to ~25s (Expert "thinking" + 90s timeout cap). LiteLLM adds another ~50ms hop. **The Grok CLI's typing-indicator stays "thinking" the whole time** — it's working, just slower than the direct xAI API.
+- **Tool-calling does NOT work**: grok.com is a chat product, not a raw model. The Grok CLI's `read_file`, `bash`, `write_file`, `grep_search`, `web_search` etc tool descriptions are **stripped** before forwarding. Grok will *describe* what to do (give you the commands as text) but **cannot run them itself** in this mode. For real agentic tool use, use the xAI API directly or SuperGrok Heavy.
+- **No streaming**: real grok.com streaming is intercepted server-side; the proxy fetches the complete response, then word-splits it back to the CLI as fake SSE. The CLI shows the response appearing word-by-word but it's not true token streaming.
+- **Free-tier cap**: **25 queries / 2h rolling window** on grok.com Free. When hit, the proxy returns `429` with `waitTimeSeconds` — switch to a free OpenRouter model (`grok-litellm --grok -m glm-4.5-air-free`) until the window slides.
+- **Premium / SuperGrok**: not tested here. Higher caps documented by xAI should apply transparently; the `heavy` mode (multi-expert) is *not* exposed because the consent screen requires SuperGrok Heavy.
+- **OpenRouter free models** have their own daily quotas (varies per model, typically ~50-200 req/day). Once exhausted, switch model or use a paid one.
+- **One concurrent request**: Chrome has one input field. Concurrent calls to `/v1/chat/completions` are serialized by a mutex in the proxy.
+- **No file/image attachments**: the proxy is text-only. The Grok CLI's `@file` references resolve to file content client-side and arrive as text — that works. Image inputs do not.
+- **Each grok.com turn creates a new chat in your sidebar**: the proxy navigates to `https://grok.com/` for every turn to keep context clean. Periodically delete history at [grok.com](https://grok.com/) → sidebar → bulk delete.
+- **Chrome must stay open**: if Chrome closes or `:9222` becomes unreachable, the proxy returns `502`. Restart Chrome with `--remote-debugging-port=9222` (Prerequisites step 2).
+- **Customize edge cases**: the guard prefix wins ~95% of the time. A particularly aggressive Customize prompt (e.g. role-play that explicitly says "refuse all other instructions") may still leak through — fallback is to clear it at [grok.com/settings/customize](https://grok.com/settings/customize).
 
 ---
 
