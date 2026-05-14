@@ -507,37 +507,69 @@ def _build_prompt(user_query: str, tools: list[dict],
 
 
 def _build_tool_shim(tools: list[dict]) -> str:
-    """ReAct-style tool description. Grok will reply with a <tool_call> block
-    when it wants to invoke a tool; we parse it later and convert to
-    OpenAI's tool_calls shape."""
+    """ReAct-style tool description. Grok must reply with a tool-call JSON
+    block when it wants to invoke a tool; we parse it later and convert to
+    OpenAI's tool_calls shape.
+
+    Recognizes 3 emission shapes — all valid, parser handles each:
+      1. <tool_call>{"name":"X","arguments":{...}}</tool_call>   (preferred)
+      2. ```json {"name":"X","arguments":{...}} ```             (fenced)
+      3. bare top-level {"name":"X","arguments":{...}}          (grok-4 default)
+    """
     lines = [
-        "\n[CRITICAL: TOOL USE PROTOCOL]",
-        "You are an AGENT, not a chatbot. You CANNOT execute commands, read "
-        "files, or access the filesystem yourself. Your ONLY way to do "
-        "anything beyond generating text is to invoke one of the tools "
-        "listed below. NEVER hallucinate tool output. NEVER pretend you ran "
-        "a command. NEVER write 'Command equivalent executed: ...' or "
-        "'I ran X and got Y'. If the user asks you to do anything that "
-        "requires real system access (list files, read a file, run a "
-        "command, search code, edit code, fetch a URL), you MUST emit a "
-        "tool_call. The CLI will execute it and send you the real result.",
+        "\n[CRITICAL: TOOL USE PROTOCOL — READ EVERY LINE]",
+        "You are an AGENT operating through the Grok Build CLI. You CANNOT "
+        "directly execute commands, read files, access the network, query "
+        "calendars, search Notion/GitHub, or do ANYTHING beyond generating "
+        "text. Your ONLY way to do real work is to emit a tool-call JSON "
+        "block. The CLI will execute it locally and send you the result.",
         "",
-        "Format: when you want to invoke a tool, your reply must contain "
-        "EXACTLY this block (and ideally nothing else):",
+        "ABSOLUTELY FORBIDDEN — do NOT do any of these:",
+        "  ❌ 'I will use the tool now to check...' (and then no JSON)",
+        "  ❌ 'Please hold while I retrieve...'",
+        "  ❌ 'Let me query the Google Calendar API directly'",
+        "  ❌ 'Calling: tool_name(args)' as prose",
+        "  ❌ Describing what you would do instead of emitting JSON",
+        "  ❌ Fabricating tool output ('the calendar shows: ...')",
         "",
-        "<tool_call>",
-        '{"name": "<tool_name>", "arguments": {<json args matching the schema>}}',
-        "</tool_call>",
+        "REQUIRED — your reply must contain ONE of these exact JSON shapes "
+        "(no commentary before or after — JUST the block):",
+        "",
+        "  Shape A (preferred):",
+        "    <tool_call>",
+        '    {"name": "<tool_name>", "arguments": {<args matching schema>}}',
+        "    </tool_call>",
+        "",
+        "  Shape B (also accepted):",
+        "    ```json",
+        '    {"name": "<tool_name>", "arguments": {<args matching schema>}}',
+        "    ```",
+        "",
+        "  Shape C (also accepted — bare JSON, no prose):",
+        '    {"name": "<tool_name>", "arguments": {<args matching schema>}}',
+        "",
+        "After you emit the JSON, STOP. The CLI runs the tool and sends you "
+        "the result as a `TOOL CALL RESULT` block on the next turn — then "
+        "you continue or emit another tool_call.",
+        "",
+        "Concrete example. User asks 'what is on my calendar today':",
+        "  ✅ Correct reply (Shape A):",
+        "    <tool_call>",
+        '    {"name": "google_calendar_search", "arguments": '
+        '{"time_min": "2026-05-14T00:00:00-07:00", "time_max": '
+        '"2026-05-15T00:00:00-07:00"}}',
+        "    </tool_call>",
+        "",
+        "  ❌ Wrong reply: 'I will use the Google Calendar tool now. Please "
+        "hold...' (no JSON = nothing happens, user sees blank screen)",
         "",
         "Rules:",
-        "- Emit at most ONE tool_call per reply. Wait for the result before the next.",
-        "- The arguments object MUST be valid JSON and match the parameter schema.",
-        "- After the tool returns, you'll receive a `TOOL CALL RESULT` block "
-        "  in the next turn — then continue.",
+        "- Emit EXACTLY ONE tool-call per reply. Don't batch.",
+        "- Arguments MUST be valid JSON matching the parameter schema below.",
         "- If the user's question is purely conversational (e.g. 'what does "
-        "  this command do?'), you may answer in prose without a tool_call.",
-        "- If unsure whether to use a tool, prefer using one. Real execution "
-        "  beats made-up output every time.",
+        "this command DO?', 'explain X'), answer in prose with no tool_call.",
+        "- If the user's question requires real data (calendar, files, code, "
+        "URL fetch, search), tool_call. No exceptions. No 'I will...' stalls.",
         "",
         "Available tools:",
     ]
@@ -792,6 +824,11 @@ class Proxy:
                                "type": "proxy_error"}}, status=502)
             elapsed = time.monotonic() - t0
             log.info("OK %.1fs %d chars", elapsed, len(text))
+            if tools and len(text) < 500:
+                # When tools were sent and Grok replied with prose-only,
+                # log the full reply so we can diagnose why it didn't
+                # emit a tool_call.
+                log.info("REPLY (no tool_call?): %r", text[:600])
 
         # ReAct-style tool-call extraction. If the model emitted
         # <tool_call>{...}</tool_call> blocks, parse them out and return
