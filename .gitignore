@@ -1,0 +1,26 @@
+# Secrets — NEVER commit these
+cookies.env
+cookies.txt
+*.session
+*.token
+*.cookies
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Logs
+*.log
+/tmp/
