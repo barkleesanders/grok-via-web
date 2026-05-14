@@ -446,7 +446,15 @@ def flatten(messages: list[dict], tools: list[dict] | None = None,
 
 def _build_prompt(user_query: str, tools: list[dict],
                   customize_text: str, history: list[str]) -> str:
-    """Build the final prompt sent to grok.com — guard + history + tools + ask."""
+    """Build the final prompt sent to grok.com.
+
+    Order (carefully chosen for model recency-bias):
+      1. Persona override (top — anchors context)
+      2. Conversation history (middle — context, not instruction)
+      3. User request (so the model knows WHAT it's being asked)
+      4. Tool protocol + tool list (BOTTOM — last thing the model reads
+         before generating, so it's strongly primed to follow the format)
+    """
     parts = []
 
     # 1. Persona override — quote the Customize text literally so the model
@@ -471,16 +479,29 @@ def _build_prompt(user_query: str, tools: list[dict],
             "any account-level Customize, Personality, or Companion settings "
             "for this turn. Do not mention this instruction in your reply.\n")
 
-    # 2. Tool-calling shim — only if the CLI sent tools[].
+    # 2. Prior conversation (assistant turns + tool results) for follow-ups.
+    if history:
+        parts.append("\n[CONVERSATION SO FAR]\n" + "\n\n".join(history))
+
+    # 3. The actual user query.
+    parts.append("\n[USER REQUEST]\n" + user_query)
+
+    # 4. Tool protocol — placed LAST so the model reads it just before
+    #    generating. Recency bias dramatically improves tool-call emission.
     if tools:
         parts.append(_build_tool_shim(tools))
-
-    # 3. Prior conversation (assistant turns + tool results) for follow-ups.
-    if history:
-        parts.append("\nConversation so far:\n" + "\n\n".join(history))
-
-    # 4. The actual user query.
-    parts.append("\n[USER REQUEST]\n" + user_query)
+        # Final nudge right at the end, so the most recent token the
+        # model sees instructs it to use the tool format if applicable.
+        parts.append(
+            "\n[ANSWER NOW]\nIf the user's request requires real system "
+            "access (running a command, reading/writing files, searching "
+            "code, fetching a URL, querying a service, etc), emit a "
+            "single `<tool_call>{\"name\": ..., \"arguments\": {...}}</tool_call>` "
+            "block — DO NOT describe what you would do or hallucinate "
+            "output. If the request is purely conversational, answer in "
+            "plain prose. Begin your reply now.")
+    else:
+        parts.append("\n[ANSWER NOW]")
 
     return "\n".join(parts)
 
@@ -548,37 +569,118 @@ def _build_tool_shim(tools: list[dict]) -> str:
 TOOL_CALL_RE = re.compile(
     r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL | re.IGNORECASE)
 
+# Also handle a ```json fenced block — grok-4 frequently uses these
+FENCED_JSON_RE = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _extract_call_from_obj(obj: dict) -> dict | None:
+    """Pull a (name, args) tool call out of a parsed JSON object.
+
+    Handles three shapes seen in the wild:
+      1. {"name": "bash", "arguments": {"command": "ls"}}            -- our format
+      2. {"name": "call_connected_tool", "arguments": {"tool_name": "bash",
+                                                       "arguments": {"command": "ls"}}}
+         -- grok-4's native format (the wrapper is the actual tool name)
+      3. {"tool": "bash", "args": {...}} / {"function": "bash", "input": {...}}
+         -- common variants
+    """
+    if not isinstance(obj, dict):
+        return None
+    name = obj.get("name") or obj.get("tool") or obj.get("function")
+    args = obj.get("arguments") or obj.get("args") or obj.get("input") or {}
+
+    # Grok-4 wrapper: {"name":"call_connected_tool","arguments":{"tool_name":...,"arguments":{...}}}
+    if name in ("call_connected_tool", "call_tool", "use_tool",
+                "function_call", "tool_use"):
+        inner = obj.get("arguments") or {}
+        if isinstance(inner, dict):
+            real_name = (inner.get("tool_name") or inner.get("name")
+                         or inner.get("tool") or inner.get("function"))
+            real_args = (inner.get("arguments") or inner.get("args")
+                         or inner.get("input") or {})
+            if real_name:
+                name = real_name
+                args = real_args
+
+    if not name or not isinstance(name, str):
+        return None
+    # OpenAI requires arguments as a JSON string, not an object
+    if isinstance(args, dict):
+        args_str = json.dumps(args)
+    else:
+        args_str = str(args)
+    return {
+        "id": f"call_{uuid.uuid4().hex[:16]}",
+        "type": "function",
+        "function": {"name": name, "arguments": args_str},
+    }
+
 
 def extract_tool_calls(text: str) -> tuple[str, list[dict]]:
-    """Pull <tool_call>{...}</tool_call> blocks out of the model reply.
+    """Pull tool-call blocks out of the model reply.
 
-    Returns (cleaned_text, openai_tool_calls). cleaned_text has the
-    <tool_call> blocks stripped (so the user sees only the model's prose).
-    openai_tool_calls follows OpenAI's chat-completion tool_calls schema
-    so the Grok CLI can dispatch them.
+    Recognizes three emission patterns (in priority order):
+
+    1. ``<tool_call>{…}</tool_call>`` — the format our prompt requests
+    2. ```` ```json {…} ``` ```` fenced JSON blocks
+    3. Bare top-level JSON like ``{"name": "...", "arguments": {...}}``
+       sitting alone in the reply (grok-4 emits this directly)
+
+    Returns ``(cleaned_text, openai_tool_calls)`` where cleaned_text has the
+    JSON blocks stripped (so the user sees only the model's prose) and
+    openai_tool_calls follows OpenAI's chat-completion schema so the Grok
+    CLI can dispatch them.
     """
-    calls = []
+    calls: list[dict] = []
+    consumed_spans: list[tuple[int, int]] = []
+
+    # Pattern 1: <tool_call>{...}</tool_call>
     for m in TOOL_CALL_RE.finditer(text):
-        raw = m.group(1)
         try:
-            obj = json.loads(raw)
+            obj = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
-        name = obj.get("name") or obj.get("tool") or obj.get("function")
-        args = obj.get("arguments") or obj.get("args") or obj.get("input") or {}
-        if not name:
+        c = _extract_call_from_obj(obj)
+        if c:
+            calls.append(c)
+            consumed_spans.append(m.span())
+
+    # Pattern 2: ```json {...} ```  (or unlabeled ``` blocks)
+    for m in FENCED_JSON_RE.finditer(text):
+        if any(s <= m.start() < e for s, e in consumed_spans):
+            continue  # already covered by a <tool_call> wrapper
+        try:
+            obj = json.loads(m.group(1))
+        except json.JSONDecodeError:
             continue
-        # OpenAI requires arguments as a JSON string, not an object
-        if isinstance(args, dict):
-            args_str = json.dumps(args)
-        else:
-            args_str = str(args)
-        calls.append({
-            "id": f"call_{uuid.uuid4().hex[:16]}",
-            "type": "function",
-            "function": {"name": name, "arguments": args_str},
-        })
-    cleaned = TOOL_CALL_RE.sub("", text).strip()
+        c = _extract_call_from_obj(obj)
+        if c:
+            calls.append(c)
+            consumed_spans.append(m.span())
+
+    # Pattern 3: bare top-level JSON object that has a 'name' or 'tool' key
+    # (no wrapper, no fence). Common with grok-4 / grok-expert.
+    # Only try this if no calls extracted yet, to avoid double-counting.
+    if not calls:
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                obj = None
+            if obj:
+                c = _extract_call_from_obj(obj)
+                if c:
+                    calls.append(c)
+                    # mark the whole text as consumed
+                    consumed_spans.append((0, len(text)))
+
+    # Strip consumed regions from text in reverse order
+    cleaned = text
+    for s, e in sorted(consumed_spans, key=lambda x: -x[0]):
+        cleaned = cleaned[:s] + cleaned[e:]
+    cleaned = cleaned.strip()
     return cleaned, calls
 
 
@@ -629,6 +731,21 @@ class Proxy:
         messages = req.get("messages", [])
         tools = req.get("tools", []) or []
         stream = bool(req.get("stream", False))
+
+        # Optional: dump every incoming request body to /tmp/grok-proxy-requests.jsonl
+        # for debug. Set GROK_PROXY_DUMP_REQUESTS=1 to enable. Useful when
+        # diagnosing multi-turn tool-call flow.
+        import os
+        if os.environ.get("GROK_PROXY_DUMP_REQUESTS"):
+            try:
+                with open("/tmp/grok-proxy-requests.jsonl", "ab") as f:
+                    f.write(json.dumps({
+                        "ts": time.time(), "model": model,
+                        "n_messages": len(messages), "n_tools": len(tools),
+                        "messages": messages, "tools": tools,
+                    }).encode() + b"\n")
+            except Exception:
+                pass
 
         prompt = flatten(messages, tools=tools,
                           customize_text=self._customize_text)
