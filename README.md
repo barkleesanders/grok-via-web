@@ -7,6 +7,42 @@ a local model via LiteLLM, from the same CLI.
 
 ## 🔥 Latest updates (2026-05-14, day-one iteration log)
 
+### SuperGrok plan changes everything (2026-05-14, late afternoon)
+
+Just verified live against `/rest/rate-limits` for a SuperGrok account vs Free:
+
+| Mode | Free tier | **SuperGrok** | Multiplier |
+|---|---|---|---|
+| `fast` (grok-3 family) | 25 / 2h (combined) | **140 / 2h** | 5.6× |
+| `expert` (grok-4 family) | (shared) | **50 / 2h** | new pool |
+| `auto` | (shared) | **50 / 2h** | new pool |
+| `heavy` | locked | locked (needs SuperGrok **Heavy** $300/mo) | — |
+| `grok-420-computer-use-sa` | not available | **available** | NEW MODE |
+
+So SuperGrok gives you **240 total queries / 2h across modes** instead of 25 —
+practical Grok Build coding sessions become viable.
+
+**`computer-use-sa` is a new agentic mode** unlocked at SuperGrok level. The
+proxy passes through whatever mode you select in your grok.com tab — pick
+"Computer Use" in the grok.com mode dropdown and the proxy will route to it.
+
+**Native `grok login --oauth` still requires SuperGrok Heavy** ($300/mo) —
+verified by hitting the consent screen which shows *"SuperGrok Heavy license
+required to use Grok Build."* So `grok-via-web` proxy stays the path even
+for SuperGrok subscribers; the OAuth route is only for Heavy.
+
+To get the full SuperGrok benefit through the proxy:
+1. Open your grok.com tab (the one Chrome :9222 attaches to)
+2. Click the mode dropdown above the input box
+3. Pick the mode you want for this session (Fast / Expert / Auto / Computer Use)
+4. The proxy picks up whatever's selected on every request
+
+Then your CLI has 50-140 queries to spend per 2h instead of 25.
+
+---
+
+
+
 Built in a single day across 9 commits. Each row is a real symptom the
 maintainer hit, the root cause we isolated, and the fix that landed.
 
@@ -211,15 +247,18 @@ haven't set return a `401` if you select them; everything else keeps working.
 
 Verified against `https://grok.com/rest/rate-limits` on 2026-05-14:
 
-| What | Limit |
-|---|---|
-| **Free tier**: queries per 2-hour rolling window | **25** (combined across `auto`/`fast`/`expert`) |
-| **Premium / SuperGrok**: higher caps (talk to xAI) | not measured here |
-| `heavy` mode (multi-expert) | Requires SuperGrok Heavy ($300/mo) — not routable from this proxy |
-| Per-turn timeout | grok.com is patient; the proxy times out at 90s |
-| File / image attachments | Not implemented — proxy is text-only |
-| Tool use (the model calling functions back) | **NOT supported.** The Grok CLI's tool-call XML is stripped before forwarding |
-| Streaming back to the CLI | Word-chunked SSE (the proxy fetches the full grok.com response, then word-splits it for streaming shape) |
+| What | Free tier | **SuperGrok** ($30/mo) | SuperGrok Heavy ($300/mo) |
+|---|---|---|---|
+| `fast` (grok-3 family) | (in 25 combined) | **140 / 2h** ✅ | higher |
+| `expert` (grok-4 family) | (in 25 combined) | **50 / 2h** ✅ | higher |
+| `auto` | **25 / 2h combined** | **50 / 2h** ✅ | higher |
+| `heavy` (multi-expert) | locked | locked | **20 / 2h** ✅ |
+| `computer-use-sa` (agentic mode) | locked | **available** ✅ | available |
+| Native `grok login --oauth` (Grok Build OAuth path) | locked | **locked** ❌ | available ✅ |
+| Per-turn timeout | proxy times out at 90s |  |  |
+| File / image attachments | not implemented (text-only) |  |  |
+| Tool-use (model calls functions) | **ReAct emulation** — works for `bash`, `read_file`, etc, with some flakiness |  |  |
+| Streaming to CLI | word-split fake SSE (proxy fetches full response, then chunks) |  |  |
 
 **Check your remaining quota:** open
 [https://grok.com/rest/rate-limits](https://grok.com/rest/rate-limits) in the
