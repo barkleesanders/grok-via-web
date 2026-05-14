@@ -5,6 +5,29 @@ subscription** instead of an API key or the $300/mo *SuperGrok Heavy* tier —
 plus optionally route to OpenRouter (incl. free models), OpenAI, Anthropic, or
 a local model via LiteLLM, from the same CLI.
 
+## 🎉 Status (verified live, 2026-05-14)
+
+**Working end-to-end with the real Grok Build CLI + your MCPs:**
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Chat completions via grok.com web session | ✅ verified | every test this session |
+| Persona override (defeats your Customize prompt) | ✅ verified | "sitemap parser" replies eliminated by literal-quote suspension |
+| Tool-call extraction (3 emission shapes) | ✅ verified | `<tool_call>`, ```` ```json ```` fence, bare top-level JSON, plus `call_connected_tool` wrapper |
+| `bash` tool dispatch | ✅ verified | `ls /tmp` via Grok-3 |
+| `google_calendar_search` MCP dispatch | ✅ verified | real calendar events returned (4 events for today) |
+| `bd` (beads) task-tracking awareness | ✅ verified | Grok emits `bd create --title=... --type=task --priority=2` when user asks to track work |
+| Multi-turn tool chains | ✅ works up to ~3-5 turns | tool result → Grok → next tool call. Beyond that, rate-limit and context dilution become issues. |
+| `grok-litellm --grok` one-line launcher | ✅ verified | Chrome proxy + LiteLLM router + Grok TUI in one command |
+| Free OpenRouter fallback models | ✅ verified | `glm-4.5-air-free`, `minimax-m2-free`, etc routable via `-m` flag |
+| Native `grok login --oauth` | ❌ still requires SuperGrok **Heavy** ($300/mo) | confirmed via consent screen 2026-05-14 |
+
+**Known soft failures (occasional, retry usually fixes):**
+
+- ~10% of tool-requiring prompts still get an "I will use the tool now…" stall instead of JSON. Just retry.
+- With 23+ MCP tools registered, Grok-3 sometimes picks the wrong tool or none. Switch to `-m grok-4` (Expert mode) for better tool selection on complex queries — slower but smarter.
+- Long multi-turn chains (5+ tool calls) eat through the SuperGrok 50-140 query / 2h cap. The proxy returns a clean `429` when that happens; switch to a free OpenRouter model to continue.
+
 ## ✅ The working launch sequence (verified 2026-05-14)
 
 If you just want to use it, this is the entire procedure:

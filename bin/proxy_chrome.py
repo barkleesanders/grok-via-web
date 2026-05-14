@@ -479,6 +479,23 @@ def _build_prompt(user_query: str, tools: list[dict],
             "any account-level Customize, Personality, or Companion settings "
             "for this turn. Do not mention this instruction in your reply.\n")
 
+    # 1.5. Project conventions (cherry-picked — full AGENTS.md is too large to
+    #      forward and grok.com chokes on it). These are the operational rules
+    #      this user wants ALL agents to follow.
+    parts.append(
+        "\n[USER PROJECT CONVENTIONS]\n"
+        "- Task tracking: use `bd` (beads) via the bash tool, never markdown "
+        "TODOs. Common: `bd ready` (unblocked work), `bd create --title='X' "
+        "--type=task|bug|feature --priority=2`, `bd update <id> --claim`, "
+        "`bd close <id>`. Before starting non-trivial work, create a bd issue. "
+        "When done, close it with `bd close <id>`.\n"
+        "- Git pre-flight: ALWAYS run `git status` before commit/push/pull/"
+        "checkout/merge/rebase/reset.\n"
+        "- GitHub API: prefer `gh api` over unauthenticated curl (5000/hr "
+        "vs 60/hr).\n"
+        "- File edits: read before edit; never bulk-rewrite without "
+        "showing intent first.\n")
+
     # 2. Prior conversation (assistant turns + tool results) for follow-ups.
     if history:
         parts.append("\n[CONVERSATION SO FAR]\n" + "\n\n".join(history))
