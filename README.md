@@ -5,6 +5,42 @@ subscription** instead of an API key or the $300/mo *SuperGrok Heavy* tier —
 plus optionally route to OpenRouter (incl. free models), OpenAI, Anthropic, or
 a local model via LiteLLM, from the same CLI.
 
+## 🔥 Latest updates (2026-05-14, day-one iteration log)
+
+Built in a single day across 9 commits. Each row is a real symptom the
+maintainer hit, the root cause we isolated, and the fix that landed.
+
+| # | Commit | Symptom that triggered it | Fix |
+|---|---|---|---|
+| 1 | [`f764220`](https://github.com/barkleesanders/grok-via-web/commit/f764220) | "Grok CLI requires SuperGrok Heavy ($300/mo) to enable OAuth — but I already pay grok.com monthly. Why can't the CLI just use my web session?" | Built the initial Chrome-DevTools-Protocol proxy. Drives the real grok.com web UI in your signed-in browser, captures the NDJSON response via CDP `Network.getResponseBody`, returns it as OpenAI-compatible `/v1/chat/completions`. Bypasses Statsig + Cloudflare because the request is made by the genuine grok.com SPA. |
+| 2 | [`53dd13a`](https://github.com/barkleesanders/grok-via-web/commit/53dd13a) | TUI replies were "sitemap parser" nonsense ("Please paste your `<urlset>` document"). | The Grok CLI sends ~100KB of XML-tagged metadata (system prompt + skills list + MCP servers + `AGENTS.md` contents + tool schemas) per request, with the actual user prompt buried in `<user_query>…</user_query>`. Forwarding all of that triggered grok.com's XML/sitemap heuristics. Fixed `flatten()` to extract only the `<user_query>` payload. |
+| 3 | [`c1bb1c8`](https://github.com/barkleesanders/grok-via-web/commit/c1bb1c8) | "Free tier is 25 queries / 2h. When I'm rate-limited the CLI is dead." | Added a companion LiteLLM router (`grok-litellm`) on `:4099` that exposes grok.com **alongside** OpenRouter (free + paid), OpenAI direct, Anthropic direct. Auto-installs LiteLLM into a managed venv on first run. Picks Python 3.13/3.12/3.11 over 3.14 because LiteLLM's `orjson` wheel doesn't ship for 3.14. |
+| 4 | [`6c1b7d0`](https://github.com/barkleesanders/grok-via-web/commit/6c1b7d0) | "When I hit the rate limit the TUI just shows 'Turn completed in 4s' with no output. Looks like the proxy is broken." | The proxy was silently returning `""` when grok.com responded with empty/error JSON. Added `GrokError` exception that surfaces the real upstream error as a `429` with the wait time. Added 7 free OpenRouter models (`glm-4.5-air-free`, `minimax-m2-free`, `deepseek-v4-free`, `qwen3-coder-free`, `gpt-oss-120b-free`, `gemma-4-31b-free`, `nemotron-super-free`) and a `m2` route to local [QClaw](https://github.com/barkleesanders/qclaw) at `:19100`. |
+| 5 | [`66bf745`](https://github.com/barkleesanders/grok-via-web/commit/66bf745) | "Why are replies sometimes coming back as sitemap parsing even when I'm not rate-limited?" | The user had a 2,000-char Customize prompt set at [grok.com/settings/customize](https://grok.com/settings/customize) telling Grok to "act as a sitemap XML extractor". grok.com prepends Customize content to every chat at server level. Documented the workaround (clear it). |
+| 6 | [`ee6fcf5`](https://github.com/barkleesanders/grok-via-web/commit/ee6fcf5) | "Clearing Customize works but I don't want to lose my prompt; can the proxy override it instead?" | Added an in-proxy guard prefix that tells the model to ignore Customize for that turn. Worked for ~50% of cases. |
+| 7 | [`d9cc169`](https://github.com/barkleesanders/grok-via-web/commit/d9cc169) | "README has stale info — bullets don't match what actually works." | Line-by-line audit. Consolidated two duplicate model tables. Updated env-var docs (`LITELLM_PORT=4099`, not 4000). Added "What actually happens" diagram for both direct and router paths. Verified all 23 declared models match the menu. |
+| 8 | [`da992aa`](https://github.com/barkleesanders/grok-via-web/commit/da992aa) | "Latency claims feel optimistic; what really works?" | Replaced aspirational pros/cons with measured numbers. Latency `~6s Fast → ~25s Expert`. Explicit "tool-calling NOT supported, no streaming, one concurrent request" with the why for each. |
+| 9 | **NEW (post-launch)** | "Persona STILL leaking through guard. Also why doesn't `read_file` / `bash` / `grep_search` actually work?" | Two fixes in one commit: (a) proxy now fetches the literal Customize text from `/rest/user-settings` and **quotes it back** with explicit "SUSPENDED for this turn" instruction — model can pattern-match on the exact content. (b) Added **ReAct-style tool-call emulation**: tool schemas get injected into the prompt with strict "you CANNOT execute commands yourself, MUST emit `<tool_call>{…}</tool_call>`" protocol. Output parser converts those blocks back to OpenAI `tool_calls` so the CLI dispatches them locally. Verified end-to-end: Grok emits `bash` tool call → CLI runs it → result fed back. |
+
+### What I learned this session
+
+- **grok.com is a chat product, not a raw model.** Stuff that's easy on the
+  xAI API (system prompts, function-calling, streaming) needs emulation here.
+- **The Customize prompt is the #1 source of persona-stuck replies.** Most
+  users don't realize they set one. Auto-detect + literal-quote-and-suspend
+  is the only thing that reliably wins.
+- **Statsig signing kills cookie-replay.** Earlier attempts to replay
+  cookies via curl got 403'd after 1-2 requests. Driving the live browser
+  via CDP is the only sustainable path.
+- **ReAct emulation works for tool-calling** even on a chat-only backend.
+  The model needs *strict* instructions ("you CANNOT execute commands
+  yourself") or it will hallucinate fake tool output.
+- **Python 3.14 is too bleeding-edge for LiteLLM** as of 2026-05-14 — pin
+  to 3.13.
+
+---
+
+
 ```
 ┌──────────┐   :4099 OpenAI    ┌──────────┐   :8788 OpenAI   ┌──────────────┐
 │ grok TUI │ ─────────────────►│ LiteLLM  │ ────────────────►│ proxy_chrome │ ──► grok.com
@@ -35,7 +71,7 @@ DevTools Protocol — your real browser session does all the auth.
 ### ⚠️ Limitations (real, measured)
 
 - **Latency per turn**: ~6s (Fast) to ~25s (Expert "thinking" + 90s timeout cap). LiteLLM adds another ~50ms hop. **The Grok CLI's typing-indicator stays "thinking" the whole time** — it's working, just slower than the direct xAI API.
-- **Tool-calling does NOT work**: grok.com is a chat product, not a raw model. The Grok CLI's `read_file`, `bash`, `write_file`, `grep_search`, `web_search` etc tool descriptions are **stripped** before forwarding. Grok will *describe* what to do (give you the commands as text) but **cannot run them itself** in this mode. For real agentic tool use, use the xAI API directly or SuperGrok Heavy.
+- **Tool-calling works via ReAct emulation** (since the latest commit): the proxy injects the CLI's tool schemas into the prompt with a strict protocol ("you CANNOT execute commands yourself; emit `<tool_call>{…}</tool_call>` and the CLI will run it for you"). Output is parsed back into OpenAI's `tool_calls` shape and dispatched by the CLI normally. Verified end-to-end with `bash`. **Caveat:** the model occasionally still tries to fake output instead of emitting a tool_call — the protocol biases toward real calls but isn't 100%. For guaranteed tool use, use the xAI API directly.
 - **No streaming**: real grok.com streaming is intercepted server-side; the proxy fetches the complete response, then word-splits it back to the CLI as fake SSE. The CLI shows the response appearing word-by-word but it's not true token streaming.
 - **Free-tier cap**: **25 queries / 2h rolling window** on grok.com Free. When hit, the proxy returns `429` with `waitTimeSeconds` — switch to a free OpenRouter model (`grok-litellm --grok -m glm-4.5-air-free`) until the window slides.
 - **Premium / SuperGrok**: not tested here. Higher caps documented by xAI should apply transparently; the `heavy` mode (multi-expert) is *not* exposed because the consent screen requires SuperGrok Heavy.
